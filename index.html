@@ -129,8 +129,6 @@
             </button>
         </div>
 
-        <div id="race-results-container" class="mb-8 section-predictions-wrap"></div>
-
         <div id="league-container" class="flex flex-col gap-8 w-full overflow-hidden"></div>
 
         <div id="podium-points-legend" class="mt-10 bg-carbon rounded-xl border border-gray-800 p-6 section-predictions-wrap">
@@ -142,6 +140,8 @@
                 <div class="bg-gray-900 rounded-lg px-4 py-3 border-l-4 border-gray-600 text-gray-400">No podium position — 0 points</div>
             </div>
         </div>
+
+        <p class="mt-8 text-center text-xs text-gray-600 tracking-wide">Designed by Atharv Patole</p>
     </div>
 
     <script src="config.js" onerror="window.APP_CONFIG=window.APP_CONFIG||{}"></script>
@@ -151,9 +151,7 @@
         const TRACK_COUNT = 14;
         const MANAGER_COUNT = 4;
 
-        const PODIUM_POINTS = { p1: 3, p2: 2, p3: 1 };
-        const PRED_COL = 100;
-        const PRED_PTS_COL = 44;
+        const COL_WIDTH = 160;
 
         window.f1State = {
             tracks: ['AUT', 'GBR', 'HUN', 'BEL', 'NED', 'ITA', 'AZE', 'SIN', 'USA', 'MEX', 'BRA', 'LVG', 'QAT', 'ABU'],
@@ -191,13 +189,18 @@
                 2: new Array(TRACK_COUNT).fill(0),
                 3: new Array(TRACK_COUNT).fill(0)
             },
+            podiumScores: {
+                0: new Array(TRACK_COUNT).fill(0),
+                1: new Array(TRACK_COUNT).fill(0),
+                2: new Array(TRACK_COUNT).fill(0),
+                3: new Array(TRACK_COUNT).fill(0)
+            },
             selections: {
                 0: Array.from({ length: TRACK_COUNT }, () => ({})),
                 1: Array.from({ length: TRACK_COUNT }, () => ({})),
                 2: Array.from({ length: TRACK_COUNT }, () => ({})),
                 3: Array.from({ length: TRACK_COUNT }, () => ({}))
-            },
-            raceResults: Array.from({ length: TRACK_COUNT }, () => ({ p1: '', p2: '', p3: '' }))
+            }
         };
 
         let syncManager;
@@ -226,28 +229,18 @@
             return `<img src="${manager.photo}" alt="${manager.name}" class="player-avatar ${sizeClass}" style="object-position:${pos};border:3px solid ${manager.color}">`;
         }
 
-        function calcPredictionPoints(managerId, trackIdx) {
-            const picks = window.f1State.selections[managerId]?.[trackIdx] || {};
-            const actual = window.f1State.raceResults[trackIdx] || {};
-            let pts = 0;
-            if (picks.p1 && actual.p1 && picks.p1 === actual.p1) pts += PODIUM_POINTS.p1;
-            if (picks.p2 && actual.p2 && picks.p2 === actual.p2) pts += PODIUM_POINTS.p2;
-            if (picks.p3 && actual.p3 && picks.p3 === actual.p3) pts += PODIUM_POINTS.p3;
-            return pts;
-        }
-
-        function calcPredictionTotal(managerId) {
-            return window.f1State.tracks.reduce((sum, _, i) => sum + calcPredictionPoints(managerId, i), 0);
-        }
-
-        function predictionGridCols() {
-            return `140px repeat(${window.f1State.tracks.length}, ${PRED_COL}px) ${PRED_PTS_COL}px`;
+        function rosterGridCols() {
+            return `140px repeat(${window.f1State.tracks.length}, ${COL_WIDTH}px)`;
         }
 
         function ensureManagerSlots(state) {
             window.f1State.managers.forEach(m => {
                 if (!state.scores[m.id] && !state.scores[String(m.id)]) {
                     state.scores[m.id] = new Array(TRACK_COUNT).fill(0);
+                }
+                if (!state.podiumScores?.[m.id] && !state.podiumScores?.[String(m.id)]) {
+                    if (!state.podiumScores) state.podiumScores = {};
+                    state.podiumScores[m.id] = new Array(TRACK_COUNT).fill(0);
                 }
                 if (!state.selections[m.id] && !state.selections[String(m.id)]) {
                     state.selections[m.id] = Array.from({ length: TRACK_COUNT }, () => ({}));
@@ -260,9 +253,9 @@
             ensureManagerSlots(data);
             window.f1State.scores = data.scores;
             window.f1State.selections = data.selections;
-            if (data.raceResults) window.f1State.raceResults = data.raceResults;
+            if (data.podiumScores) window.f1State.podiumScores = data.podiumScores;
             syncDOMWithState();
-            updatePredictionDisplays();
+            updatePodiumDisplays();
             updateDashboard();
         }
 
@@ -272,15 +265,6 @@
                 const tIdx = select.dataset.track;
                 const catId = select.dataset.category;
                 const savedVal = window.f1State.selections[mId]?.[tIdx]?.[catId];
-                if (savedVal !== undefined && select.value !== savedVal) {
-                    select.value = savedVal;
-                }
-            });
-
-            document.querySelectorAll('.result-select').forEach(select => {
-                const tIdx = select.dataset.track;
-                const catId = select.dataset.category;
-                const savedVal = window.f1State.raceResults[tIdx]?.[catId];
                 if (savedVal !== undefined && select.value !== savedVal) {
                     select.value = savedVal;
                 }
@@ -308,101 +292,48 @@
             if (isApplyingRemote) return;
             syncManager.save({
                 scores: window.f1State.scores,
-                selections: window.f1State.selections,
-                raceResults: window.f1State.raceResults
+                podiumScores: window.f1State.podiumScores,
+                selections: window.f1State.selections
             });
         }
 
-        function updatePredictionDisplays() {
+        function updatePodiumDisplays() {
             window.f1State.managers.forEach(m => {
-                const total = calcPredictionTotal(m.id);
                 window.f1State.tracks.forEach((_, tIdx) => {
+                    const trackTotal = window.f1State.podiumScores[m.id]?.[tIdx] ?? 0;
                     const el = document.getElementById(`pred-pts-${m.id}-${tIdx}`);
                     if (el) {
-                        const pts = calcPredictionPoints(m.id, tIdx);
-                        el.textContent = pts;
-                        el.classList.toggle('text-f1red', pts > 0);
-                        el.classList.toggle('text-gray-500', pts === 0);
+                        el.textContent = trackTotal;
+                        el.classList.toggle('text-f1red', trackTotal > 0);
+                        el.classList.toggle('text-gray-500', trackTotal === 0);
                     }
                 });
-                const totalEl = document.getElementById(`pred-total-${m.id}`);
-                if (totalEl) totalEl.textContent = total;
+                const total = (window.f1State.podiumScores[m.id] || []).reduce((a, b) => a + b, 0);
                 const headerEl = document.getElementById(`pred-header-total-${m.id}`);
                 if (headerEl) headerEl.textContent = total;
             });
-        }
-
-        function renderRaceResultsCard() {
-            const trackHeaders = window.f1State.tracks.map(t =>
-                `<div class="text-center" title="${t} Grand Prix">${t}</div>`
-            ).join('');
-            const options = window.f1State.drivers.map(d => `<option value="${d}">${d}</option>`).join('');
-            const cols = predictionGridCols();
-
-            const rows = window.f1State.predictions.map(cat => `
-                <div class="driver-row grid gap-2 items-center bg-gray-900 p-2 rounded border-l-4 border-f1red w-max" style="grid-template-columns:${cols}">
-                    <div class="text-xs md:text-sm font-bold text-gray-300 uppercase tracking-wide">${cat.name}</div>
-                    ${window.f1State.tracks.map((_, tIndex) => `
-                        <div>
-                            <select data-track="${tIndex}" data-category="${cat.id}" class="result-select w-full bg-asphalt text-white text-xs px-1 py-1.5 rounded border border-gray-700 focus:border-f1red focus:outline-none cursor-pointer">
-                                <option value="">—</option>
-                                ${options}
-                            </select>
-                        </div>
-                    `).join('')}
-                    <div></div>
-                </div>
-            `).join('');
-
-            document.getElementById('race-results-container').innerHTML = `
-                <div class="bg-carbon rounded-xl overflow-hidden shadow-2xl border border-f1red/50">
-                    <div class="p-4 border-b border-gray-800" style="background: linear-gradient(135deg, #E10600 0%, #15151E 120%);">
-                        <h3 class="text-xl font-racing uppercase tracking-wider">Official Podium Results</h3>
-                        <p class="text-gray-300 text-xs uppercase tracking-widest mt-1">Enter actual race finishers to score predictions</p>
-                    </div>
-                    <div class="p-4 overflow-x-auto">
-                        <div class="grid gap-2 px-2 pb-2 border-b border-gray-700 text-xs font-bold text-gray-500 uppercase w-max" style="grid-template-columns:${cols}">
-                            <div>Result</div>${trackHeaders}<div class="text-center">—</div>
-                        </div>
-                        <div class="space-y-2 mt-3 w-max">${rows}</div>
-                    </div>
-                </div>`;
-
-            document.querySelectorAll('.result-select').forEach(el => {
-                el.addEventListener('change', handleRaceResultChange);
-            });
-        }
-
-        function handleRaceResultChange(e) {
-            const select = e.target;
-            const tIdx = parseInt(select.dataset.track);
-            const catId = select.dataset.category;
-            if (!window.f1State.raceResults[tIdx]) window.f1State.raceResults[tIdx] = {};
-            window.f1State.raceResults[tIdx][catId] = select.value;
-            updatePredictionDisplays();
-            triggerSave();
         }
 
         function createManagerCard(manager) {
             const trackHeaders = window.f1State.tracks.map(t =>
                 `<div class="text-center" title="${t} Grand Prix">${t}</div>`
             ).join('');
+            const cols = rosterGridCols();
 
-            const cols = predictionGridCols();
             const predictionsHtml = window.f1State.predictions.map(cat => {
                 const options = window.f1State.drivers.map(d => `<option value="${d}">${d}</option>`).join('');
                 return `
                 <div class="driver-row grid gap-2 items-center bg-gray-900 p-2 rounded border-l-4 border-transparent hover:border-gray-500 transition-all duration-200 w-max" style="grid-template-columns:${cols}">
                     <div class="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wide">${cat.name}</div>
-                    ${window.f1State.tracks.map((t, tIndex) => `
-                        <div>
-                            <select data-manager="${manager.id}" data-track="${tIndex}" data-category="${cat.id}" class="driver-select w-full bg-asphalt text-white text-xs px-1 py-1.5 rounded border border-gray-700 focus:border-white focus:outline-none cursor-pointer">
-                                <option value="" disabled selected>Select...</option>
+                    ${window.f1State.tracks.map((_, tIndex) => `
+                        <div class="flex gap-1">
+                            <select data-manager="${manager.id}" data-track="${tIndex}" data-category="${cat.id}" class="driver-select w-2/3 bg-asphalt text-white text-xs px-1 py-1.5 rounded border border-gray-700 focus:border-white focus:outline-none cursor-pointer">
+                                <option value="" disabled selected>Pick</option>
                                 ${options}
                             </select>
+                            <input type="number" min="0" max="3" placeholder="Pts" class="score-input w-1/3 bg-carbon text-center text-white text-xs px-1 py-1.5 rounded border border-gray-600 focus:outline-none transition-colors" data-manager="${manager.id}" data-track="${tIndex}" data-category="${cat.id}-pts" data-score-type="podium">
                         </div>
                     `).join('')}
-                    <div></div>
                 </div>`;
             }).join('');
 
@@ -412,7 +343,6 @@
                     ${window.f1State.tracks.map((_, tIndex) => `
                         <div class="text-center prediction-pts text-sm text-gray-500" id="pred-pts-${manager.id}-${tIndex}">0</div>
                     `).join('')}
-                    <div class="text-center prediction-pts text-lg text-white" id="pred-total-${manager.id}">0</div>
                 </div>`;
 
             const fantasyHtml = window.f1State.fantasy.map(cat => {
@@ -421,15 +351,15 @@
                     : window.f1State.teams.map(t => `<option value="${t}">${t}</option>`).join('');
 
                 return `
-                <div class="driver-row grid gap-2 items-center bg-gray-900 p-2 rounded border-l-4 border-transparent transition-all duration-200 w-max" style="grid-template-columns: 140px repeat(${window.f1State.tracks.length}, 160px);">
+                <div class="driver-row grid gap-2 items-center bg-gray-900 p-2 rounded border-l-4 border-transparent transition-all duration-200 w-max" style="grid-template-columns:${cols}">
                     <div class="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wide">${cat.name}</div>
-                    ${window.f1State.tracks.map((t, tIndex) => `
+                    ${window.f1State.tracks.map((_, tIndex) => `
                         <div class="flex gap-1">
                             <select data-manager="${manager.id}" data-track="${tIndex}" data-category="${cat.id}" class="driver-select w-2/3 bg-asphalt text-white text-xs px-1 py-1.5 rounded border border-gray-700 focus:border-white focus:outline-none cursor-pointer">
                                 <option value="" disabled selected>Pick</option>
                                 ${options}
                             </select>
-                            <input type="number" min="0" placeholder="Pts" class="score-input w-1/3 bg-carbon text-center text-white text-xs px-1 py-1.5 rounded border border-gray-600 focus:outline-none transition-colors" data-manager="${manager.id}" data-track="${tIndex}" data-category="${cat.id}-pts">
+                            <input type="number" min="0" placeholder="Pts" class="score-input w-1/3 bg-carbon text-center text-white text-xs px-1 py-1.5 rounded border border-gray-600 focus:outline-none transition-colors" data-manager="${manager.id}" data-track="${tIndex}" data-category="${cat.id}-pts" data-score-type="fantasy">
                         </div>
                     `).join('')}
                 </div>`;
@@ -457,12 +387,12 @@
                     <div class="p-4 flex-1 overflow-x-auto relative pb-6">
                         <div class="tab-content section-predictions active">
                             <div class="grid gap-2 px-2 pb-2 border-b border-gray-700 text-xs font-bold text-gray-500 uppercase w-max" style="grid-template-columns:${cols}">
-                                <div>Podium Pick</div>${trackHeaders}<div class="text-center text-f1red">TOT</div>
+                                <div>Podium Pick</div>${trackHeaders}
                             </div>
                             <div class="space-y-2 mt-3 w-max">${predictionsHtml}${predictionPtsRow}</div>
                         </div>
                         <div class="tab-content section-fantasy">
-                            <div class="grid gap-2 px-2 pb-2 border-b border-gray-700 text-xs font-bold text-gray-500 uppercase w-max" style="grid-template-columns: 140px repeat(${window.f1State.tracks.length}, 160px);">
+                            <div class="grid gap-2 px-2 pb-2 border-b border-gray-700 text-xs font-bold text-gray-500 uppercase w-max" style="grid-template-columns:${cols}">
                                 <div>Fantasy Roster</div>${trackHeaders}
                             </div>
                             <div class="space-y-2 mt-3 w-max">${fantasyHtml}</div>
@@ -472,7 +402,6 @@
         }
 
         function renderCards() {
-            renderRaceResultsCard();
             const container = document.getElementById('league-container');
             container.innerHTML = '';
             window.f1State.managers.forEach(manager => {
@@ -487,7 +416,7 @@
             });
 
             syncDOMWithState();
-            updatePredictionDisplays();
+            updatePodiumDisplays();
         }
 
         function handleSelectionChange(e) {
@@ -499,7 +428,6 @@
             if (!window.f1State.selections[mId]) window.f1State.selections[mId] = [];
             if (!window.f1State.selections[mId][tIdx]) window.f1State.selections[mId][tIdx] = {};
             window.f1State.selections[mId][tIdx][catId] = select.value;
-            updatePredictionDisplays();
             triggerSave();
         }
 
@@ -508,24 +436,29 @@
             const managerId = parseInt(input.dataset.manager);
             const trackIndex = parseInt(input.dataset.track);
             const catId = input.dataset.category;
+            const scoreType = input.dataset.scoreType || 'fantasy';
 
             if (!window.f1State.selections[managerId]) window.f1State.selections[managerId] = [];
             if (!window.f1State.selections[managerId][trackIndex]) window.f1State.selections[managerId][trackIndex] = {};
             window.f1State.selections[managerId][trackIndex][catId] = input.value;
 
-            const trackInputs = document.querySelectorAll(`.score-input[data-manager="${managerId}"][data-track="${trackIndex}"]`);
+            const trackInputs = document.querySelectorAll(`.score-input[data-manager="${managerId}"][data-track="${trackIndex}"][data-score-type="${scoreType}"]`);
             let trackTotal = 0;
             trackInputs.forEach(inp => {
                 const val = parseInt(inp.value, 10);
                 if (!isNaN(val)) trackTotal += val;
             });
 
-            window.f1State.scores[managerId][trackIndex] = trackTotal;
-            const grandTotal = window.f1State.scores[managerId].reduce((a, b) => a + b, 0);
-            const totalEl = document.getElementById(`total-${managerId}`);
-            if (totalEl) totalEl.innerText = grandTotal;
-
-            updateDashboard();
+            if (scoreType === 'podium') {
+                window.f1State.podiumScores[managerId][trackIndex] = trackTotal;
+                updatePodiumDisplays();
+            } else {
+                window.f1State.scores[managerId][trackIndex] = trackTotal;
+                const grandTotal = window.f1State.scores[managerId].reduce((a, b) => a + b, 0);
+                const totalEl = document.getElementById(`total-${managerId}`);
+                if (totalEl) totalEl.innerText = grandTotal;
+                updateDashboard();
+            }
             triggerSave();
         }
 
@@ -691,8 +624,8 @@
                 if (!saved && mode === 'cloud') {
                     await syncManager.persist({
                         scores: window.f1State.scores,
-                        selections: window.f1State.selections,
-                        raceResults: window.f1State.raceResults
+                        podiumScores: window.f1State.podiumScores,
+                        selections: window.f1State.selections
                     });
                 }
             } catch (err) {

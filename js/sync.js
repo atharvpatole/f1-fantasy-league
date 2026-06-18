@@ -22,23 +22,12 @@ function normalizeSelections(selections, managerCount, trackCount) {
     return result;
 }
 
-function normalizeRaceResults(raceResults, trackCount) {
-    return Array.from({ length: trackCount }, (_, t) => {
-        const track = raceResults?.[t] ?? raceResults?.[String(t)] ?? {};
-        return {
-            p1: track.p1 || "",
-            p2: track.p2 || "",
-            p3: track.p3 || ""
-        };
-    });
-}
-
 export function normalizeState(raw, managerCount, trackCount) {
     if (!raw) return null;
     return {
         scores: normalizeScores(raw.scores ?? {}, managerCount, trackCount),
-        selections: normalizeSelections(raw.selections ?? {}, managerCount, trackCount),
-        raceResults: normalizeRaceResults(raw.raceResults ?? [], trackCount)
+        podiumScores: normalizeScores(raw.podiumScores ?? {}, managerCount, trackCount),
+        selections: normalizeSelections(raw.selections ?? {}, managerCount, trackCount)
     };
 }
 
@@ -58,7 +47,11 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
     }
 
     function stateFingerprint(state) {
-        return JSON.stringify({ scores: state.scores, selections: state.selections, raceResults: state.raceResults });
+        return JSON.stringify({
+            scores: state.scores,
+            podiumScores: state.podiumScores,
+            selections: state.selections
+        });
     }
 
     function saveToLocal(state) {
@@ -106,7 +99,12 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
         const res = await fetch("/api/league", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ appId, scores: state.scores, selections: state.selections, raceResults: state.raceResults })
+            body: JSON.stringify({
+                appId,
+                scores: state.scores,
+                podiumScores: state.podiumScores,
+                selections: state.selections
+            })
         });
         if (!res.ok) throw new Error("Save failed");
         const result = await res.json();
