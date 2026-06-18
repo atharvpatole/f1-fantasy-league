@@ -1,17 +1,11 @@
 const STORAGE_KEY = "f1-fantasy-league-state";
-
-function isConfigured(value) {
-    return typeof value === "string" && value.length > 0 && !value.includes("YOUR_");
-}
+const POLL_MS = 1000;
 
 function normalizeScores(scores, managerCount, trackCount) {
     const result = {};
     for (let m = 0; m < managerCount; m++) {
         const raw = scores?.[m] ?? scores?.[String(m)] ?? [];
-        result[m] = Array.from({ length: trackCount }, (_, i) => {
-            const val = raw[i] ?? raw[String(i)];
-            return Number(val) || 0;
-        });
+        result[m] = Array.from({ length: trackCount }, (_, i) => Number(raw[i] ?? raw[String(i)]) || 0);
     }
     return result;
 }
@@ -29,151 +23,85 @@ function normalizeSelections(selections, managerCount, trackCount) {
 }
 
 export function normalizeState(raw, managerCount, trackCount) {
+    if (!raw) return null;
     return {
-        scores: normalizeScores(raw?.scores ?? {}, managerCount, trackCount),
-        selections: normalizeSelections(raw?.selections ?? {}, managerCount, trackCount)
+        scores: normalizeScores(raw.scores ?? {}, managerCount, trackCount),
+        selections: normalizeSelections(raw.selections ?? {}, managerCount, trackCount)
     };
 }
 
 export function createSyncManager(config = {}, managerCount = 3, trackCount = 14) {
     const appId = config.appId || "f1-fantasy-tracker-v1";
     let mode = "local";
-    let supabaseClient = null;
-    let firebaseCtx = null;
-    let realtimeChannel = null;
-    let firestoreUnsub = null;
     let onRemoteChange = null;
     let saveTimer = null;
+    let pollTimer = null;
+    let lastSeenAt = 0;
     let lastSavedJson = "";
+
+    const apiUrl = `/api/league?appId=${encodeURIComponent(appId)}`;
 
     function storageKey() {
         return `${STORAGE_KEY}:${appId}`;
     }
 
-    function loadFromLocal() {
-        try {
-            const raw = localStorage.getItem(storageKey());
-            if (!raw) return null;
-            return normalizeState(JSON.parse(raw), managerCount, trackCount);
-        } catch (e) {
-            console.warn("Could not read local storage", e);
-            return null;
-        }
+    function stateFingerprint(state) {
+        return JSON.stringify({ scores: state.scores, selections: state.selections });
     }
 
     function saveToLocal(state) {
-        const payload = JSON.stringify(state);
+        const payload = stateFingerprint(state);
         if (payload === lastSavedJson) return;
         lastSavedJson = payload;
         localStorage.setItem(storageKey(), payload);
     }
 
-    async function initSupabase() {
-        const sb = config.supabase;
-        if (!sb || !isConfigured(sb.url) || !isConfigured(sb.anonKey)) return false;
-
-        const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm");
-        supabaseClient = createClient(sb.url, sb.anonKey);
-        mode = "supabase";
-
-        realtimeChannel = supabaseClient
-            .channel(`league-${appId}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "league_state", filter: `app_id=eq.${appId}` },
-                (payload) => {
-                    const row = payload.new;
-                    if (!row || !onRemoteChange) return;
-                    onRemoteChange(normalizeState(row, managerCount, trackCount));
-                }
-            )
-            .subscribe();
-
-        return true;
+    function loadFromLocal() {
+        try {
+            const raw = localStorage.getItem(storageKey());
+            return raw ? normalizeState(JSON.parse(raw), managerCount, trackCount) : null;
+        } catch {
+            return null;
+        }
     }
 
-    async function initFirebase() {
-        const fb = config.firebase;
-        if (!fb || !isConfigured(fb.projectId)) return false;
-
-        const { initializeApp } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
-        const { getAuth, signInAnonymously } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
-        const { getFirestore, doc, onSnapshot } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
-
-        const app = initializeApp(fb);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        await signInAnonymously(auth);
-
-        const stateRef = doc(db, "artifacts", appId, "public", "data", "league_state");
-        firestoreUnsub = onSnapshot(stateRef, (docSnap) => {
-            if (!docSnap.exists() || !onRemoteChange) return;
-            onRemoteChange(normalizeState(docSnap.data(), managerCount, trackCount));
-        });
-
-        firebaseCtx = { db, appId };
-        mode = "firebase";
-        return true;
-    }
-
-    async function init() {
-        if (await initSupabase()) return mode;
-        if (await initFirebase()) return mode;
-        mode = "local";
-        return mode;
+    async function initCloud() {
+        try {
+            const res = await fetch(apiUrl, { method: "GET", cache: "no-store" });
+            if (!res.ok) return false;
+            mode = "cloud";
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     async function load() {
-        if (mode === "supabase") {
-            const { data, error } = await supabaseClient
-                .from("league_state")
-                .select("scores, selections")
-                .eq("app_id", appId)
-                .maybeSingle();
-
-            if (error) throw error;
-            if (data) return normalizeState(data, managerCount, trackCount);
-            return null;
+        if (mode === "cloud") {
+            const res = await fetch(apiUrl, { method: "GET", cache: "no-store" });
+            if (!res.ok) throw new Error("Load failed");
+            const data = await res.json();
+            if (data?.updatedAt) lastSeenAt = data.updatedAt;
+            return normalizeState(data, managerCount, trackCount);
         }
-
-        if (mode === "firebase") {
-            const { getFirestore, doc, getDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
-            const db = getFirestore();
-            const stateRef = doc(db, "artifacts", appId, "public", "data", "league_state");
-            const snap = await getDoc(stateRef);
-            if (snap.exists()) return normalizeState(snap.data(), managerCount, trackCount);
-            return null;
-        }
-
         return loadFromLocal();
     }
 
     async function persist(state) {
         saveToLocal(state);
+        if (mode !== "cloud") return;
 
-        if (mode === "supabase") {
-            const { error } = await supabaseClient.from("league_state").upsert(
-                {
-                    app_id: appId,
-                    scores: state.scores,
-                    selections: state.selections,
-                    updated_at: new Date().toISOString()
-                },
-                { onConflict: "app_id" }
-            );
-            if (error) throw error;
-            return;
-        }
-
-        if (mode === "firebase") {
-            const { getFirestore, doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
-            const db = getFirestore();
-            const stateRef = doc(db, "artifacts", appId, "public", "data", "league_state");
-            await setDoc(stateRef, { scores: state.scores, selections: state.selections }, { merge: true });
-        }
+        const res = await fetch("/api/league", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ appId, scores: state.scores, selections: state.selections })
+        });
+        if (!res.ok) throw new Error("Save failed");
+        const result = await res.json();
+        if (result?.updatedAt) lastSeenAt = result.updatedAt;
     }
 
-    function save(state, debounceMs = 400) {
+    function save(state, debounceMs = 300) {
         clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
             persist(state).catch((e) => console.error("Save failed:", e));
@@ -188,11 +116,28 @@ export function createSyncManager(config = {}, managerCount = 3, trackCount = 14
                 if (e.key !== storageKey() || !e.newValue) return;
                 try {
                     callback(normalizeState(JSON.parse(e.newValue), managerCount, trackCount));
-                } catch (err) {
-                    console.warn("Could not parse storage event", err);
-                }
+                } catch { /* ignore */ }
             });
+            return;
         }
+
+        pollTimer = setInterval(async () => {
+            try {
+                const res = await fetch(apiUrl, { method: "GET", cache: "no-store" });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data) return;
+                if (data.updatedAt && data.updatedAt <= lastSeenAt) return;
+                if (data.updatedAt) lastSeenAt = data.updatedAt;
+                callback(normalizeState(data, managerCount, trackCount));
+            } catch { /* ignore */ }
+        }, POLL_MS);
+    }
+
+    async function init() {
+        if (await initCloud()) return mode;
+        mode = "local";
+        return mode;
     }
 
     function getMode() {
@@ -201,8 +146,7 @@ export function createSyncManager(config = {}, managerCount = 3, trackCount = 14
 
     function destroy() {
         clearTimeout(saveTimer);
-        if (realtimeChannel && supabaseClient) supabaseClient.removeChannel(realtimeChannel);
-        if (firestoreUnsub) firestoreUnsub();
+        clearInterval(pollTimer);
     }
 
     return { init, load, save, subscribe, getMode, destroy, persist };

@@ -182,9 +182,8 @@
             const dot = document.getElementById('sync-dot');
             const label = document.getElementById('sync-label');
             const styles = {
-                supabase: { color: 'bg-green-500', text: 'Live sync (cloud)' },
-                firebase: { color: 'bg-green-500', text: 'Live sync (firebase)' },
-                local: { color: 'bg-yellow-500', text: 'Saved on this device' }
+                cloud: { color: 'bg-green-500', text: 'Live sync' },
+                local: { color: 'bg-yellow-500', text: 'This device only' }
             };
             const s = styles[mode] || styles.local;
             dot.className = `inline-block w-2 h-2 rounded-full ${s.color} mr-1`;
@@ -512,7 +511,7 @@
                 const saved = await syncManager.load();
                 if (saved) applyState(saved);
 
-                if (!saved && mode !== 'local') {
+                if (!saved && mode === 'cloud') {
                     await syncManager.persist({
                         scores: window.f1State.scores,
                         selections: window.f1State.selections
