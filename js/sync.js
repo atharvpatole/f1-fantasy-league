@@ -30,7 +30,7 @@ export function normalizeState(raw, managerCount, trackCount) {
     };
 }
 
-export function createSyncManager(config = {}, managerCount = 3, trackCount = 14) {
+export function createSyncManager(config = {}, managerCount = 4, trackCount = 14) {
     const appId = config.appId || "f1-fantasy-tracker-v1";
     let mode = "local";
     let onRemoteChange = null;
