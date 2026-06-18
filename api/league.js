@@ -17,12 +17,12 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
-        const { scores, selections } = req.body || {};
+        const { scores, selections, raceResults } = req.body || {};
         if (!scores || !selections) {
             return res.status(400).json({ error: "Missing scores or selections" });
         }
         const updatedAt = Date.now();
-        const payload = { scores, selections, updatedAt };
+        const payload = { scores, selections, raceResults: raceResults || [], updatedAt };
         await redis.set(key(appId), payload);
         return res.status(200).json({ ok: true, updatedAt });
     }
