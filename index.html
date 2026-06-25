@@ -87,7 +87,6 @@
                 <img src="photos/f1.png" alt="F1" class="f1-logo">
                 <div>
                     <h1 class="text-2xl md:text-4xl font-racing tracking-wider uppercase text-white mt-2">Fantasy Tracker</h1>
-                    <p class="text-gray-400 text-sm md:text-base font-semibold uppercase tracking-widest">4-Player Dashboard</p>
                 </div>
             </div>
             <div id="sync-status" class="text-right text-xs uppercase tracking-widest text-gray-500">
@@ -129,6 +128,12 @@
             </button>
         </div>
 
+        <div class="flex justify-end mb-4 px-2">
+            <button id="btn-add-player" type="button" class="flex items-center gap-2 bg-f1red hover:bg-red-600 text-white font-racing uppercase text-sm px-4 py-2 rounded-lg transition-colors shadow-lg">
+                <span class="text-xl leading-none font-bold">+</span> Add Player
+            </button>
+        </div>
+
         <div id="league-container" class="flex flex-col gap-8 w-full overflow-hidden"></div>
 
         <div id="podium-points-legend" class="mt-10 bg-carbon rounded-xl border border-gray-800 p-6 section-predictions-wrap">
@@ -149,9 +154,8 @@
         import { createSyncManager } from "./js/sync.js";
 
         const TRACK_COUNT = 14;
-        const MANAGER_COUNT = 4;
-
         const COL_WIDTH = 160;
+        const PLAYER_COLORS = ['#E10600', '#FF8700', '#00A19B', '#7B2CBF', '#3498DB', '#2ECC71', '#F1C40F', '#E67E22', '#1ABC9C', '#9B59B6'];
 
         window.f1State = {
             tracks: ['AUT', 'GBR', 'HUN', 'BEL', 'NED', 'ITA', 'AZE', 'SIN', 'USA', 'MEX', 'BRA', 'LVG', 'QAT', 'ABU'],
@@ -225,8 +229,12 @@
         }
 
         function avatarImg(manager, sizeClass = 'w-14 h-14') {
-            const pos = manager.photoPos || 'center 22%';
-            return `<img src="${manager.photo}" alt="${manager.name}" class="player-avatar ${sizeClass}" style="object-position:${pos};border:3px solid ${manager.color}">`;
+            if (manager.photo) {
+                const pos = manager.photoPos || 'center 22%';
+                return `<img src="${manager.photo}" alt="${manager.name}" class="player-avatar ${sizeClass}" style="object-position:${pos};border:3px solid ${manager.color}">`;
+            }
+            const initial = (manager.name || '?').charAt(0).toUpperCase();
+            return `<div class="player-avatar ${sizeClass} flex items-center justify-center font-racing text-white text-lg" style="background:${manager.color};border:3px solid ${manager.color}">${initial}</div>`;
         }
 
         function rosterGridCols() {
@@ -250,13 +258,50 @@
 
         function applyState(data) {
             if (!data) return;
+            if (data.managers?.length) window.f1State.managers = data.managers;
             ensureManagerSlots(data);
             window.f1State.scores = data.scores;
             window.f1State.selections = data.selections;
             if (data.podiumScores) window.f1State.podiumScores = data.podiumScores;
+            renderCards();
             syncDOMWithState();
             updatePodiumDisplays();
             updateDashboard();
+        }
+
+        function getActiveTab() {
+            return document.getElementById('btn-tab-fantasy').classList.contains('active') ? 'fantasy' : 'predictions';
+        }
+
+        function addPlayer() {
+            const name = prompt('Enter player name:');
+            if (!name?.trim()) return;
+
+            const id = window.f1State.managers.reduce((max, m) => Math.max(max, m.id), -1) + 1;
+            const color = PLAYER_COLORS[window.f1State.managers.length % PLAYER_COLORS.length];
+            const manager = { id, name: name.trim(), color, photo: null, photoPos: 'center 22%' };
+
+            window.f1State.managers.push(manager);
+            window.f1State.scores[id] = new Array(TRACK_COUNT).fill(0);
+            window.f1State.podiumScores[id] = new Array(TRACK_COUNT).fill(0);
+            window.f1State.selections[id] = Array.from({ length: TRACK_COUNT }, () => ({}));
+
+            const tab = getActiveTab();
+            renderCards();
+            switchGlobalTab(tab);
+            updateDashboard();
+            initLineChart();
+            updateLineChart();
+            triggerSave();
+        }
+
+        function getSavePayload() {
+            return {
+                managers: window.f1State.managers,
+                scores: window.f1State.scores,
+                podiumScores: window.f1State.podiumScores,
+                selections: window.f1State.selections
+            };
         }
 
         function syncDOMWithState() {
@@ -290,11 +335,7 @@
 
         function triggerSave() {
             if (isApplyingRemote) return;
-            syncManager.save({
-                scores: window.f1State.scores,
-                podiumScores: window.f1State.podiumScores,
-                selections: window.f1State.selections
-            });
+            syncManager.save(getSavePayload());
         }
 
         function updatePodiumDisplays() {
@@ -606,7 +647,7 @@
         }
 
         async function boot() {
-            syncManager = createSyncManager(window.APP_CONFIG || {}, MANAGER_COUNT, TRACK_COUNT);
+            syncManager = createSyncManager(window.APP_CONFIG || {}, TRACK_COUNT);
 
             try {
                 const mode = await syncManager.init();
@@ -620,20 +661,16 @@
 
                 const saved = await syncManager.load();
                 if (saved) applyState(saved);
-
-                if (!saved && mode === 'cloud') {
-                    await syncManager.persist({
-                        scores: window.f1State.scores,
-                        podiumScores: window.f1State.podiumScores,
-                        selections: window.f1State.selections
-                    });
+                else {
+                    renderCards();
+                    if (mode === 'cloud') await syncManager.persist(getSavePayload());
                 }
             } catch (err) {
                 console.error("Sync init failed, using local mode:", err);
                 setSyncStatus('local');
+                renderCards();
             }
 
-            renderCards();
             initDonutChart();
             initLineChart();
             switchGlobalTab('predictions');
@@ -643,6 +680,7 @@
 
         document.getElementById('btn-tab-predictions').addEventListener('click', () => switchGlobalTab('predictions'));
         document.getElementById('btn-tab-fantasy').addEventListener('click', () => switchGlobalTab('fantasy'));
+        document.getElementById('btn-add-player').addEventListener('click', addPlayer);
         window.addEventListener('resize', () => { initLineChart(); updateLineChart(); });
         boot();
     </script>

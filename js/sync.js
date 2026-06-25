@@ -1,20 +1,29 @@
 const STORAGE_KEY = "f1-fantasy-league-state";
 const POLL_MS = 1000;
 
-function normalizeScores(scores, managerCount, trackCount) {
+function managerIds(raw) {
+    if (raw?.managers?.length) return raw.managers.map((m) => m.id);
+    const ids = new Set([
+        ...Object.keys(raw?.scores ?? {}),
+        ...Object.keys(raw?.selections ?? {})
+    ]);
+    return [...ids].map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+}
+
+function normalizeScores(scores, ids, trackCount) {
     const result = {};
-    for (let m = 0; m < managerCount; m++) {
-        const raw = scores?.[m] ?? scores?.[String(m)] ?? [];
-        result[m] = Array.from({ length: trackCount }, (_, i) => Number(raw[i] ?? raw[String(i)]) || 0);
+    for (const id of ids) {
+        const raw = scores?.[id] ?? scores?.[String(id)] ?? [];
+        result[id] = Array.from({ length: trackCount }, (_, i) => Number(raw[i] ?? raw[String(i)]) || 0);
     }
     return result;
 }
 
-function normalizeSelections(selections, managerCount, trackCount) {
+function normalizeSelections(selections, ids, trackCount) {
     const result = {};
-    for (let m = 0; m < managerCount; m++) {
-        const rawTracks = selections?.[m] ?? selections?.[String(m)] ?? [];
-        result[m] = Array.from({ length: trackCount }, (_, t) => {
+    for (const id of ids) {
+        const rawTracks = selections?.[id] ?? selections?.[String(id)] ?? [];
+        result[id] = Array.from({ length: trackCount }, (_, t) => {
             const track = rawTracks[t] ?? rawTracks[String(t)] ?? {};
             return typeof track === "object" && track !== null ? { ...track } : {};
         });
@@ -22,16 +31,19 @@ function normalizeSelections(selections, managerCount, trackCount) {
     return result;
 }
 
-export function normalizeState(raw, managerCount, trackCount) {
+export function normalizeState(raw, trackCount = 14) {
     if (!raw) return null;
+    const managers = raw.managers?.length ? raw.managers : null;
+    const ids = managers ? managers.map((m) => m.id) : managerIds(raw);
     return {
-        scores: normalizeScores(raw.scores ?? {}, managerCount, trackCount),
-        podiumScores: normalizeScores(raw.podiumScores ?? {}, managerCount, trackCount),
-        selections: normalizeSelections(raw.selections ?? {}, managerCount, trackCount)
+        managers,
+        scores: normalizeScores(raw.scores ?? {}, ids, trackCount),
+        podiumScores: normalizeScores(raw.podiumScores ?? {}, ids, trackCount),
+        selections: normalizeSelections(raw.selections ?? {}, ids, trackCount)
     };
 }
 
-export function createSyncManager(config = {}, managerCount = 4, trackCount = 14) {
+export function createSyncManager(config = {}, trackCount = 14) {
     const appId = config.appId || "f1-fantasy-tracker-v1";
     let mode = "local";
     let onRemoteChange = null;
@@ -48,6 +60,7 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
 
     function stateFingerprint(state) {
         return JSON.stringify({
+            managers: state.managers,
             scores: state.scores,
             podiumScores: state.podiumScores,
             selections: state.selections
@@ -64,7 +77,7 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
     function loadFromLocal() {
         try {
             const raw = localStorage.getItem(storageKey());
-            return raw ? normalizeState(JSON.parse(raw), managerCount, trackCount) : null;
+            return raw ? normalizeState(JSON.parse(raw), trackCount) : null;
         } catch {
             return null;
         }
@@ -87,7 +100,7 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
             if (!res.ok) throw new Error("Load failed");
             const data = await res.json();
             if (data?.updatedAt) lastSeenAt = data.updatedAt;
-            return normalizeState(data, managerCount, trackCount);
+            return normalizeState(data, trackCount);
         }
         return loadFromLocal();
     }
@@ -101,6 +114,7 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 appId,
+                managers: state.managers,
                 scores: state.scores,
                 podiumScores: state.podiumScores,
                 selections: state.selections
@@ -125,7 +139,7 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
             window.addEventListener("storage", (e) => {
                 if (e.key !== storageKey() || !e.newValue) return;
                 try {
-                    callback(normalizeState(JSON.parse(e.newValue), managerCount, trackCount));
+                    callback(normalizeState(JSON.parse(e.newValue), trackCount));
                 } catch { /* ignore */ }
             });
             return;
@@ -139,7 +153,7 @@ export function createSyncManager(config = {}, managerCount = 4, trackCount = 14
                 if (!data) return;
                 if (data.updatedAt && data.updatedAt <= lastSeenAt) return;
                 if (data.updatedAt) lastSeenAt = data.updatedAt;
-                callback(normalizeState(data, managerCount, trackCount));
+                callback(normalizeState(data, trackCount));
             } catch { /* ignore */ }
         }, POLL_MS);
     }
